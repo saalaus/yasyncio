@@ -1,4 +1,4 @@
-# AioYandexDisk
+# yasyncio
 Asyncio upload files to YandexDisk
 ## Use
 Set you token in file and run
