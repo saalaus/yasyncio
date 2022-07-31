@@ -1,82 +1,69 @@
 import asyncio
-from aiohttp import ClientSession
-from os import path, listdir, rename
-from sys import argv
-import requests
-import time
 import logging
+import time
+from pathlib import Path
+from sys import argv
 
-# logger = logging.getLogger("yasyncio")
-# logging.basicConfig(filename='logs.log', filemode='w', level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+from aiohttp import ClientSession
 
 
-TOKEN = 'AQAAAABEwImmAAcQ84dL9_0pREQYpntlSCuWmtQ'
+logger = logging.getLogger("yasyncio")
+
+logging.basicConfig(level=logging.DEBUG)
+
+
+TOKEN = 'TOKEN'
 
 
 start_time = time.time()
+API_URL = "https://cloud-api.yandex.net/v1/disk/resources"
 HEADERS = {'Authorization': 'OAuth {}'.format(TOKEN)}
+file_tasks = []
 
-# функция для загрузки файлов на яндекс диск
-async def upload_file(file, fold=""):
-    async with session.get('https://cloud-api.yandex.net/v1/disk/resources/upload', params=dict(path=fold, overwrite='True'), headers=HEADERS) as response:
-        r = await response.json()
-        # print(r)
-        r = r['href']
+
+# upload files on yandex disk
+async def upload_file(session, file, fold="", overwrite="true"):
+    async with session.get(API_URL+'/upload', params=dict(path=fold, overwrite=overwrite), headers=HEADERS)\
+        as response:
+        r = (await response.json())["href"]
         with open(file, 'rb') as f:
             async with session.put(r, data=dict(file=f)) as response2:
-                # logger.info(f'Файл {file} создан')
+                logger.info(f'File {fold} was created')
                 return await response2.read()
 
 
-# функция для создания папок на яндекс диске
-async def mkdir(path):
-    async with session.put('https://cloud-api.yandex.net/v1/disk/resources', params=(dict(path=path)), headers=HEADERS) as response:
+# mkdir folder on yandex disk
+async def mkdir(session, path):
+    async with session.put(API_URL, params=(dict(path=str(path))), headers=HEADERS)\
+        as response:
         r = await response.read()
-        # logger.info(f'Папка {path} создана')
+        logger.info(f'Fold {path} was created')
         return r
 
 
-# функция для поиска файлов и папок в заданной директории
-async def scan_dir(file, folder='', yandex_dir=''):
-    dir = list(path.split(file))
-    dir[0] = path.join(dir[0], folder)
-    file = path.join(dir[0], dir[1])
-    if path.isfile(file):
-        tasks.append(loop.create_task(upload_file(file.replace(
-            '\\', '/'), path.normpath(path.join(yandex_dir, dir[1])).replace('\\', '/'))))
-    else:
-        yandex_dir = path.join(yandex_dir, dir[1])
-        await mkdir(path.normpath(yandex_dir).replace('\\', '/'))
-        for i in listdir(file):
-            await scan_dir(path.join(dir[0], i),
-                               dir[1],
-                               yandex_dir
-                               )
+async def scan_dir(session: ClientSession, path=".", yandex_path=""):
+    p = Path(path)
+    folds = [x for x in p.iterdir() if x.is_dir()]
+    files = [x for x in p.iterdir() if x.is_file()]
+    for fold in folds:
+        path = str(Path(yandex_path)/fold.name).replace("\\", "/")
+        await mkdir(session, path)
+        await scan_dir(session, fold, path)
+    for file in files:
+        path = str(Path(yandex_path)/file.name).replace("\\", "/")
+        file_tasks.append(asyncio.create_task(
+            upload_file(session, file, path)))
 
 
-async def create_session():
-    return ClientSession()
+async def main():
+    session = ClientSession()
+
+    await scan_dir(session, argv[-1])
+    await asyncio.gather(*file_tasks)
+
+    await session.close()
+
+    logger.info(time.time() - start_time)
 
 
-async def close_session(session):
-    return await session.close()
-
-
-try:
-    loop = asyncio.new_event_loop()
-    tasks = []
-
-    session = loop.run_until_complete(create_session())
-
-    print("сканирование директории")
-    loop.run_until_complete(scan_dir('C:\\Users\\User\\Desktop\\python_projects'))
-    print("завершение сканирования")
-    loop.run_until_complete(asyncio.gather(*tasks))
-    print("завершение выложения")
-    asyncio.run(close_session(session))
-    loop.close()
-    # loop.run_until_complete(main())
-    print(time.time() - start_time)
-except Exception as e:
-    print(e)
-    # logger.critical(e)
+asyncio.get_event_loop().run_until_complete(main())
