@@ -1,58 +1,84 @@
 import asyncio
 import logging
-import time
+import os
 from pathlib import Path
 from sys import argv
+import time
+from typing import Literal
 
 from aiohttp import ClientSession
 
-
-logger = logging.getLogger("yasyncio")
-
-logging.basicConfig(level=logging.DEBUG)
-
-
-TOKEN = 'TOKEN'
+from settings import HEADERS, API_URL, logger, TOKEN
 
 
 start_time = time.time()
-API_URL = "https://cloud-api.yandex.net/v1/disk/resources"
-HEADERS = {'Authorization': 'OAuth {}'.format(TOKEN)}
 file_tasks = []
 
 
-# upload files on yandex disk
-async def upload_file(session, file, fold="", overwrite="true"):
-    async with session.get(API_URL+'/upload', params=dict(path=fold, overwrite=overwrite), headers=HEADERS)\
-        as response:
+async def upload_file(
+        session: ClientSession,
+        file: str | Path,
+        fold: str = "",
+        overwrite: Literal["true", "false"] = "true"):
+    """upload files on yandex disk
+    session = ClientSession
+    file = path file to upload
+    fold = folder in yandex disk to upload
+    overwrite = overwrite in yandex disk
+    """
+    url = API_URL+"/upload"
+    params = {
+        "path": fold,
+        "overwrite": overwrite,
+    }
+    async with session.get(
+            url,
+            params=params,
+            headers=HEADERS) as response:
         r = (await response.json())["href"]
         with open(file, 'rb') as f:
-            async with session.put(r, data=dict(file=f)) as response2:
+            async with session.put(r, data={"file": f}) as response2:
                 logger.info(f'File {fold} was created')
                 return await response2.read()
 
 
-# mkdir folder on yandex disk
-async def mkdir(session, path):
-    async with session.put(API_URL, params=(dict(path=str(path))), headers=HEADERS)\
-        as response:
+async def mkdir(session: ClientSession, path: Path | str):
+    """make directory in yandex disk
+    session = ClientSession
+    path = path to folder in yandex disk
+    """
+    params = {
+        "path": path
+    }
+    async with session.put(
+            API_URL,
+            params=params,
+            headers=HEADERS) as response:
         r = await response.read()
         logger.info(f'Fold {path} was created')
         return r
 
 
-async def scan_dir(session: ClientSession, path=".", yandex_path=""):
-    p = Path(path)
-    folds = [x for x in p.iterdir() if x.is_dir()]
-    files = [x for x in p.iterdir() if x.is_file()]
+async def scan_dir(session: ClientSession, path: Path | str = ".", yandex_path: str = ""):
+    """Scan directory, finds folders and files, and run upload him
+    session = ClientSession
+    path = path to scan
+    yandex_path = path to yandex disk
+    """
+    scan_path = Path(path)
+    folds = [x for x in scan_path.iterdir() if x.is_dir()]
+    files = [x for x in scan_path.iterdir() if x.is_file()]
     for fold in folds:
-        path = str(Path(yandex_path)/fold.name).replace("\\", "/")
+        path = str(Path(yandex_path)/fold.name)
         await mkdir(session, path)
         await scan_dir(session, fold, path)
     for file in files:
-        path = str(Path(yandex_path)/file.name).replace("\\", "/")
+        path = str(Path(yandex_path)/file.name)
         file_tasks.append(asyncio.create_task(
-            upload_file(session, file, path)))
+            upload_file(session, file,
+                        path)
+        )
+        )
 
 
 async def main():
@@ -66,4 +92,4 @@ async def main():
     logger.info(time.time() - start_time)
 
 
-asyncio.get_event_loop().run_until_complete(main())
+asyncio.run(main())
